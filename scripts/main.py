@@ -5,8 +5,8 @@ Edit the configuration block, then run:
 
     python scripts/main.py
 
-Compares Direct (dense matrix), Fourier quotient (circular), and optionally
-matrix-free iterative FFT reconstruction under fill boundaries.
+Compares Direct (dense matrix), Fourier quotient (circular), matrix-free
+iterative FFT CGLS, and fill gradient descent under configurable boundaries.
 """
 
 from __future__ import annotations
@@ -27,6 +27,11 @@ if str(_REPO_ROOT) not in sys.path:
 from deconv.forward.blur import add_gaussian_noise, apply_blur
 from deconv.methods.direct import direct_deconvolution
 from deconv.methods.fourier import fourier_deconvolution
+from deconv.methods.gradient_descent import (
+    DEFAULT_GD_MAXITER,
+    DEFAULT_GD_TOL,
+    gradient_deconvolution_with_info,
+)
 from deconv.methods.iterative import (
     DEFAULT_CGLS_MAXITER,
     DEFAULT_CGLS_TOL,
@@ -56,10 +61,13 @@ IMAGE_PATH = str(IMAGES_DIR / "ring.png")
 SYNTHETIC_PATTERN = "edge_square"
 # "corner_pixel" | "edge_square" | "border_frame" | "diagonal"
 
-# Method
-METHOD = "all"
-# "direct" | "fourier" | "iterative" | "both" | "all"
-# "both" = direct + fourier; "all" = direct + fourier + iterative
+# Methods to run — any non-empty subset, in any order.
+METHODS: tuple[str, ...] = ("direct", "fourier", "gradient")
+# Allowed names: "direct", "fourier", "iterative", "gradient"
+# Examples:
+#   METHODS = ("direct", "fourier")
+#   METHODS = ("iterative", "gradient")
+#   METHODS = ("gradient",)
 
 # Image settings — matched to analyze_scaling defaults
 IMAGE_SIZE = 64
@@ -78,11 +86,15 @@ RECONSTRUCTION_SIGMA = SIGMA
 # Matched to analyze_scaling: fill observation + Direct fill; Fourier circular.
 BOUNDARY_MODE = "mismatch"
 # "equivalent" — wrap / wrap   (Direct ≈ Fourier under circular convolution)
-# "mismatch"   — fill / fill   (Direct & Iterative solve fill; Fourier assumes wrap)
+# "mismatch"   — fill / fill   (Direct, Iterative, Gradient solve fill; Fourier assumes wrap)
 
 # CGLS (iterative) — same defaults as analyze_scaling
 CGLS_TOL = DEFAULT_CGLS_TOL
 CGLS_MAXITER = DEFAULT_CGLS_MAXITER
+
+# Gradient descent (same fill operator; shared tol/maxiter defaults)
+GD_TOL = DEFAULT_GD_TOL
+GD_MAXITER = DEFAULT_GD_MAXITER
 
 # ---------------------------------------------------------------------------
 
@@ -95,6 +107,41 @@ BOUNDARY_MODE_LABELS: dict[str, str] = {
     "equivalent": "Equivalent",
     "mismatch": "Mismatch",
 }
+
+
+ALLOWED_METHODS: tuple[str, ...] = ("direct", "fourier", "iterative", "gradient")
+
+
+def resolve_methods(methods: str | list[str] | tuple[str, ...]) -> tuple[str, ...]:
+    """
+    Normalise a method selection to a stable ordered tuple.
+
+    Accepts a sequence of method names, or a single comma-separated string.
+    Legacy aliases ``"all"`` and ``"both"`` are still recognised.
+    """
+    if isinstance(methods, str):
+        raw = tuple(p.strip().lower() for p in methods.split(",") if p.strip())
+    else:
+        raw = tuple(str(m).strip().lower() for m in methods if str(m).strip())
+
+    if not raw:
+        raise ValueError("METHODS must list at least one method.")
+
+    # Legacy single-token aliases.
+    if raw == ("all",):
+        return ALLOWED_METHODS
+    if raw == ("both",):
+        return ("direct", "fourier")
+
+    unknown = set(raw) - set(ALLOWED_METHODS)
+    if unknown:
+        raise ValueError(
+            f"Unknown method(s) {sorted(unknown)}; "
+            f"choose from {list(ALLOWED_METHODS)} "
+            "(or legacy aliases 'all' / 'both')."
+        )
+    # Preserve canonical order, drop duplicates.
+    return tuple(m for m in ALLOWED_METHODS if m in raw)
 
 
 def resolve_boundaries(mode: str) -> tuple[str, str]:
@@ -130,8 +177,9 @@ def save_comparison(
     recovered_fourier: np.ndarray | None,
     path: Path,
     recovered_iterative: np.ndarray | None = None,
+    recovered_gradient: np.ndarray | None = None,
 ) -> None:
-    """Save Original | Observation | Direct | Fourier | Iterative."""
+    """Save Original | Observation | Direct | Fourier | Iterative | Gradient."""
     panels: list[tuple[np.ndarray, str]] = [
         (original, "Original"),
         (observation, "Observation"),
@@ -141,7 +189,9 @@ def save_comparison(
     if recovered_fourier is not None:
         panels.append((recovered_fourier, "Fourier"))
     if recovered_iterative is not None:
-        panels.append((recovered_iterative, "Iterative FFT"))
+        panels.append((recovered_iterative, "Iterative CGLS"))
+    if recovered_gradient is not None:
+        panels.append((recovered_gradient, "Gradient descent"))
 
     fig, axes = plt.subplots(1, len(panels), figsize=(3.4 * len(panels), 3.4))
     if len(panels) == 1:
@@ -160,6 +210,7 @@ def save_error_maps(
     recovered_fourier: np.ndarray,
     path: Path,
     recovered_iterative: np.ndarray | None = None,
+    recovered_gradient: np.ndarray | None = None,
 ) -> None:
     """Absolute-error panels with one shared color scale."""
     panels_data: list[tuple[np.ndarray, str]] = [
@@ -175,6 +226,16 @@ def save_error_maps(
             (
                 np.abs(recovered_direct - recovered_iterative),
                 "|Direct − Iterative|",
+            )
+        )
+    if recovered_gradient is not None:
+        panels_data.append(
+            (np.abs(original - recovered_gradient), "Absolute Error (Gradient)")
+        )
+        panels_data.append(
+            (
+                np.abs(recovered_direct - recovered_gradient),
+                "|Direct − Gradient|",
             )
         )
 
@@ -205,12 +266,13 @@ def save_metrics_figure(
     metrics_fourier: dict[str, float] | None,
     path: Path,
     metrics_iterative: dict[str, float] | None = None,
+    metrics_gradient: dict[str, float] | None = None,
 ) -> None:
     """Runtime (log) and MSE bars for available methods."""
     labels: list[str] = []
     runtime: list[float] = []
     mse: list[float] = []
-    colors_cycle = ("#3b6d9c", "#c46b3a", "#2f6f4e")
+    colors_cycle = ("#3b6d9c", "#c46b3a", "#2f6f4e", "#8b5a2b")
     if metrics_direct is not None:
         labels.append("Direct")
         runtime.append(metrics_direct["runtime_seconds"])
@@ -223,6 +285,10 @@ def save_metrics_figure(
         labels.append("Iterative")
         runtime.append(metrics_iterative["runtime_seconds"])
         mse.append(metrics_iterative["mse"])
+    if metrics_gradient is not None:
+        labels.append("Gradient")
+        runtime.append(metrics_gradient["runtime_seconds"])
+        mse.append(metrics_gradient["mse"])
     if not labels:
         return
 
@@ -233,7 +299,7 @@ def save_metrics_figure(
     bars = axes[0].bar(labels, runtime_plot, color=colors)
     axes[0].set_yscale("log")
     axes[0].set_ylabel("Seconds (log scale)")
-    axes[0].set_title("Runtime (deconvolution only)")
+    axes[0].set_title("Runtime")
     for bar, value in zip(bars, runtime):
         axes[0].annotate(
             f"{value:.4g} s",
@@ -282,6 +348,18 @@ def save_iterative_convergence(residual_history: list[float], path: Path) -> Non
     plt.close(fig)
 
 
+def save_gradient_convergence(residual_history: list[float], path: Path) -> None:
+    fig, axis = plt.subplots(figsize=(6.0, 3.6))
+    axis.semilogy(np.arange(len(residual_history)), residual_history, color="#8b5a2b")
+    axis.set_xlabel("Gradient-descent iteration")
+    axis.set_ylabel(r"$\|Ax_k - b\|_2 / \|b\|_2$")
+    axis.set_title("Fill gradient-descent residual")
+    axis.grid(True, which="both", linestyle=":", alpha=0.5)
+    fig.tight_layout()
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
 def write_metrics_file(
     path: Path,
     *,
@@ -294,6 +372,8 @@ def write_metrics_file(
     metrics_fourier: dict[str, float] | None,
     metrics_iterative: dict[str, float] | None = None,
     iterative_iterations: int | None = None,
+    metrics_gradient: dict[str, float] | None = None,
+    gradient_iterations: int | None = None,
 ) -> None:
     """Write a concise metrics.txt for the presentation."""
     lines = [
@@ -306,7 +386,8 @@ def write_metrics_file(
         "Boundaries:",
         "  Direct: same as blur (wrap or fill)",
         "  Fourier: circular",
-        "  Iterative: fill (matrix-free FFT)",
+        "  Iterative: fill (matrix-free FFT CGLS)",
+        "  Gradient: fill (matrix-free FFT gradient descent)",
         "",
         "Sigma:",
         str(sigma),
@@ -362,6 +443,22 @@ def write_metrics_file(
         )
         if iterative_iterations is not None:
             lines.extend(["Iterative iterations:", str(iterative_iterations), ""])
+    if metrics_gradient is not None:
+        lines.extend(
+            [
+                "Gradient runtime:",
+                f"{metrics_gradient['runtime_seconds']:.6f} s",
+                "",
+                "Gradient MSE:",
+                f"{metrics_gradient['mse']:.6e}",
+                "",
+                "Gradient rel_error:",
+                f"{metrics_gradient.get('rel_error', float('nan')):.6e}",
+                "",
+            ]
+        )
+        if gradient_iterations is not None:
+            lines.extend(["Gradient iterations:", str(gradient_iterations), ""])
     path.write_text("\n".join(lines), encoding="utf-8")
 
 
@@ -375,6 +472,8 @@ def print_summary(
     output_dir: Path,
     metrics_iterative: dict[str, float] | None = None,
     iterative_iterations: int | None = None,
+    metrics_gradient: dict[str, float] | None = None,
+    gradient_iterations: int | None = None,
 ) -> None:
     """Print a concise console summary."""
     print("================================")
@@ -419,6 +518,19 @@ def print_summary(
             print("Iterations")
             print(iterative_iterations)
             print()
+    if metrics_gradient is not None:
+        print("Gradient descent (fill)")
+        print()
+        print("Runtime")
+        print(f"{metrics_gradient['runtime_seconds']:.6f} s")
+        print()
+        print("MSE")
+        print(f"{metrics_gradient['mse']:.6e}")
+        print()
+        if gradient_iterations is not None:
+            print("Iterations")
+            print(gradient_iterations)
+            print()
     print("Results folder")
     print()
     print(f"{output_dir}/")
@@ -431,14 +543,12 @@ def run() -> Path:
     if RECONSTRUCTION_SIGMA <= 0:
         raise ValueError("RECONSTRUCTION_SIGMA must be positive")
 
-    method = METHOD.lower().strip()
-    allowed = {"direct", "fourier", "iterative", "both", "all"}
-    if method not in allowed:
-        raise ValueError(f"METHOD must be one of {sorted(allowed)}.")
-
-    want_direct = method in {"direct", "both", "all"}
-    want_fourier = method in {"fourier", "both", "all"}
-    want_iterative = method in {"iterative", "all"}
+    selected = resolve_methods(METHODS)
+    want_direct = "direct" in selected
+    want_fourier = "fourier" in selected
+    want_iterative = "iterative" in selected
+    want_gradient = "gradient" in selected
+    method_label = ",".join(selected)
 
     boundary_mode = BOUNDARY_MODE.lower().strip()
     blur_boundary, direct_boundary = resolve_boundaries(boundary_mode)
@@ -454,11 +564,15 @@ def run() -> Path:
     recovered_direct = None
     recovered_fourier = None
     recovered_iterative = None
+    recovered_gradient = None
     metrics_direct = None
     metrics_fourier = None
     metrics_iterative = None
+    metrics_gradient = None
     iterative_iterations = None
+    gradient_iterations = None
     iterative_residual_history: list[float] | None = None
+    gradient_residual_history: list[float] | None = None
 
     if want_direct:
         direct_fn = partial(
@@ -498,6 +612,21 @@ def run() -> Path:
         iterative_iterations = info.iterations
         iterative_residual_history = info.residual_history
 
+    if want_gradient:
+        # Same fill operator + steepest descent (no CGLS).
+        t0 = perf_counter()
+        info = gradient_deconvolution_with_info(
+            observation,
+            reconstruction_psf,
+            tol=GD_TOL,
+            maxiter=GD_MAXITER,
+        )
+        elapsed = perf_counter() - t0 + blur_s
+        recovered_gradient = info.image
+        metrics_gradient = compute_metrics(original, recovered_gradient, elapsed)
+        gradient_iterations = info.iterations
+        gradient_residual_history = info.residual_history
+
     observation_display = clip_to_unit_interval(observation)
     direct_display = (
         clip_to_unit_interval(recovered_direct)
@@ -514,6 +643,11 @@ def run() -> Path:
         if recovered_iterative is not None
         else None
     )
+    gradient_display = (
+        clip_to_unit_interval(recovered_gradient)
+        if recovered_gradient is not None
+        else None
+    )
 
     output_dir = create_results_folder("results")
     save_image(original, output_dir / "original.png")
@@ -524,6 +658,8 @@ def run() -> Path:
         save_image(fourier_display, output_dir / "recovered_fourier.png")
     if iterative_display is not None:
         save_image(iterative_display, output_dir / "recovered_iterative.png")
+    if gradient_display is not None:
+        save_image(gradient_display, output_dir / "recovered_gradient.png")
 
     save_comparison(
         original,
@@ -532,6 +668,7 @@ def run() -> Path:
         fourier_display,
         output_dir / "comparison.png",
         recovered_iterative=iterative_display,
+        recovered_gradient=gradient_display,
     )
     if recovered_direct is not None and recovered_fourier is not None:
         save_error_maps(
@@ -540,22 +677,29 @@ def run() -> Path:
             recovered_fourier,
             output_dir / "error_maps.png",
             recovered_iterative=recovered_iterative,
+            recovered_gradient=recovered_gradient,
         )
     save_metrics_figure(
         metrics_direct,
         metrics_fourier,
         output_dir / "metrics.png",
         metrics_iterative=metrics_iterative,
+        metrics_gradient=metrics_gradient,
     )
     if iterative_residual_history is not None:
         save_iterative_convergence(
             iterative_residual_history,
             output_dir / "iterative_convergence.png",
         )
+    if gradient_residual_history is not None:
+        save_gradient_convergence(
+            gradient_residual_history,
+            output_dir / "gradient_convergence.png",
+        )
 
     write_metrics_file(
         output_dir / "metrics.txt",
-        method=method,
+        method=method_label,
         boundary_mode=boundary_mode,
         sigma=SIGMA,
         kernel_size=KERNEL_SIZE,
@@ -564,6 +708,8 @@ def run() -> Path:
         metrics_fourier=metrics_fourier,
         metrics_iterative=metrics_iterative,
         iterative_iterations=iterative_iterations,
+        metrics_gradient=metrics_gradient,
+        gradient_iterations=gradient_iterations,
     )
     print_summary(
         boundary_mode=boundary_mode,
@@ -574,8 +720,11 @@ def run() -> Path:
         output_dir=output_dir,
         metrics_iterative=metrics_iterative,
         iterative_iterations=iterative_iterations,
+        metrics_gradient=metrics_gradient,
+        gradient_iterations=gradient_iterations,
     )
     return output_dir
+
 
 
 if __name__ == "__main__":

@@ -3,7 +3,7 @@
 ## Install
 
 ```bash
-cd fourier-deconv
+cd deconvolution
 pip install -r requirements.txt
 pip install pytest    # needed for tests
 ```
@@ -23,6 +23,7 @@ python -m pytest -v
 | `tests/test_fourier.py` | Circular Fourier identities, PSF alignment, Tikhonov |
 | `tests/test_pipeline.py` | PSF normalization, wrap FFT≡`convolve2d`, matched wrap recovery |
 | `tests/test_iterative.py` | Fill forward≡Direct \(A\), adjoint test, CGLS≈Direct, ≠Fourier |
+| `tests/test_gradient.py` | GD≈Direct on mild blur, ≠Fourier, more iters than CGLS |
 
 All tests should pass before trusting new experiments.
 
@@ -44,15 +45,16 @@ python scripts/main.py
 | `SYNTHETIC_PATTERN` | Pattern name | `"border_frame"` / `"diagonal"` / … |
 | `IMAGE_SIZE` | \(N\) for \(N\times N\) | `32` or `64` |
 | `SIGMA`, `KERNEL_SIZE` | Gaussian PSF | `1.0`, `7` (aligned with scaling) |
-| `METHOD` | Which solvers | `"all"`, `"both"`, `"direct"`, `"fourier"`, `"iterative"` |
+| `METHODS` | Which solvers to run | `("direct", "fourier", "iterative", "gradient")` or any subset |
 | `BOUNDARY_MODE` | Blur + Direct pair | `"mismatch"` (fill) or `"equivalent"` (wrap) |
-| `CGLS_TOL`, `CGLS_MAXITER` | Iterative solver | `1e-10`, `5000` |
+| `CGLS_TOL`, `CGLS_MAXITER` | Iterative CGLS | `1e-10`, `5000` |
+| `GD_TOL`, `GD_MAXITER` | Gradient descent | `1e-10`, `5000` |
 | `NOISE_STD` | Optional Gaussian noise | `0.0` |
 
 ### Boundary modes in the demo
 
 - **`mismatch`** — blur & Direct use **fill**; Fourier stays circular. Best for
-  comparing all three on a fill observation (same protocol as scaling).
+  comparing Direct / Iterative / Gradient on a fill observation (same protocol as scaling).
 - **`equivalent`** — blur & Direct use **wrap**; Fourier circular. Direct ≈ Fourier.
 
 ### Outputs (`results/<timestamp>/`)
@@ -66,6 +68,7 @@ python scripts/main.py
 | `error_maps.png` | Absolute errors (when Direct + Fourier ran) |
 | `metrics.png` / `metrics.txt` | Runtime and MSE |
 | `iterative_convergence.png` | CGLS residual history (if iterative ran) |
+| `gradient_convergence.png` | Gradient-descent residual history (if gradient ran) |
 
 Timing reported here is **deconvolution only** (blur and I/O are outside the clock).
 
@@ -87,7 +90,7 @@ python scripts/analyze_scaling.py
 # KERNEL_SIZE=7, ANALYSIS_SIZES=(16,24,32,40,48,64), CGLS_MAXITER, CGLS_TOL
 
 python scripts/analyze_scaling.py \
-  --methods direct,fourier,iterative \
+  --methods direct,fourier,iterative,gradient \
   --direct-boundary fill \
   --maxiter 5000 \
   --sizes 16,24,32,40
@@ -98,21 +101,21 @@ python scripts/analyze_scaling.py --methods direct,iterative --direct-boundary w
 
 | Flag | Effect |
 |------|--------|
-| `--methods` | Subset of `direct,fourier,iterative` |
+| `--methods` | Subset of `direct,fourier,iterative,gradient` |
 | `--direct-boundary` | `fill` or `wrap` for Direct only |
-| `--maxiter` / `--tol` | CGLS controls |
+| `--maxiter` / `--tol` | Shared CGLS and gradient-descent controls |
 | `--sizes` | Comma-separated \(N\) values |
 | `--sigma` / `--kernel-size` | PSF |
 
 **Fixed:** observation blur is always **fill**.  
 **Fixed:** Fourier reconstruction is always **circular**.  
-**Fixed:** Iterative reconstruction is always **fill**.
+**Fixed:** Iterative CGLS and gradient descent are always **fill**.
 
 ### Outputs
 
 ```
 results/<timestamp>/
-├── benchmark_three_method.{csv,json,txt}
+├── benchmark_methods.{csv,json,txt}
 ├── runtime_vs_pixels.png
 ├── memory_vs_pixels.png
 ├── error_vs_pixels.png
@@ -122,8 +125,10 @@ results/<timestamp>/
 │   ├── error_vs_pixels.png
 │   ├── rel_residual_vs_pixels.png
 │   ├── mse_vs_pixels.png
-│   ├── iterations_vs_pixels.png          # if iterative selected
-│   └── iterative_vs_direct_agreement.png # if both selected
+│   ├── iterations_vs_pixels.png              # if iterative selected
+│   ├── gradient_iterations_vs_pixels.png     # if gradient selected
+│   ├── iterative_vs_direct_agreement.png     # if iterative+direct
+│   └── gradient_vs_direct_agreement.png      # if gradient+direct
 └── N16/, N24/, …                         # per-size images + convergence
 ```
 
@@ -139,10 +144,10 @@ deliberately.
 python scripts/benchmark.py
 ```
 
-Runs the same fill-observation three-method protocol (default sizes
+Runs the same fill-observation multi-method protocol (default sizes
 `16,24,32,40`) and writes tables + analysis plots. Prefer
 `scripts/analyze_scaling.py` when you want CLI control over methods and sizes;
-the harness itself lives in `deconv/experiments/experiment.py`.
+the harness itself lives in `deconv/experiments/experiment.py` (writes `benchmark_methods.{json,csv,txt}`).
 
 ---
 
@@ -150,8 +155,9 @@ the harness itself lives in `deconv/experiments/experiment.py`.
 
 On the default fill observation:
 
-- **Direct / Iterative** invert the fill operator → small error when the blur
-  is well conditioned and CGLS is allowed enough iterations.
+- **Direct / Iterative / Gradient** invert the fill operator → small error when
+  the blur is well conditioned and the iterative solvers are allowed enough
+  iterations (GD usually needs more than CGLS).
 - **Fourier** assumes wrap → often large relative error even when it looks
   “smoother” than a failed inverse. Smooth ≠ correct.
 

@@ -146,6 +146,37 @@ Cost scale: \(O(K N^2 \log N)\) vs Fourier quotient \(O(N^2 \log N)\).
 
 ---
 
+
+
+### Gradient descent
+
+Same fill operator and objective \(f(x)=\tfrac12\|A x-b\|_2^2\). Instead of
+CGLS, take steepest-descent steps:
+
+\[
+g = A^{\mathsf T}(A x - b),
+\qquad
+\alpha = \frac{\|g\|_2^2}{\|A g\|_2^2},
+\qquad
+x \leftarrow x - \alpha g.
+\]
+
+Exact line search for this quadratic chooses \(\alpha\); there are **no**
+conjugate directions. Default stopping accepts either
+
+\[
+\frac{\|A^{\mathsf T}(Ax-b)\|_2}{\|A^{\mathsf T} b\|_2} < 10^{-10}
+\quad\text{or}\quad
+\frac{\|Ax-b\|_2}{\|b\|_2} < 10^{-10},
+\]
+
+with \(x_0=0\), \(\mathrm{maxiter}=5000\), float64.
+
+On mild fill problems GD reaches the Direct solution but typically needs more
+iterations than CGLS.
+
+---
+
 ## 5. Metrics
 
 | Metric | Definition |
@@ -167,7 +198,8 @@ operator, even for Fourier reconstructions — that exposes model mismatch.
 |--------|-----------------|---------------|
 | Direct | Dense \(A\): \(O(N^4)\) entries | Build \(A\) + dense LS |
 | Fourier | \(O(N^2)\) FFT buffers | Few FFTs |
-| Iterative | \(O(N^2)\) work vectors + padded FFTs | \(K\) forward/adjoint FFT pairs |
+| Iterative (CGLS) | \(O(N^2)\) work vectors + padded FFTs | \(K\) forward/adjoint FFT pairs |
+| Gradient descent | Same as iterative | Typically larger \(K\) than CGLS |
 
 ---
 

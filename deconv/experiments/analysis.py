@@ -1,5 +1,6 @@
 """
-Multi-size scaling analysis for Direct, Fourier, and Iterative FFT methods.
+Multi-size scaling analysis for Direct, Fourier, Iterative CGLS, and
+gradient-descent methods.
 
 The forward observation is **always** fill / zero-pad blur. Reconstruction
 methods and Direct's boundary are configurable.
@@ -11,8 +12,8 @@ Figures written
 * relative reconstruction error vs pixels
 * relative data residual vs pixels
 * MSE vs pixels
-* CGLS iterations vs pixels (if iterative is selected)
-* iterative vs direct agreement (if both selected)
+* solver iterations vs pixels (if iterative and/or gradient selected)
+* iterative/gradient vs direct agreement (when paired with Direct)
 
 Edit the configuration block below, or pass CLI flags.
 
@@ -20,8 +21,8 @@ Usage
 -----
     python scripts/analyze_scaling.py
     python scripts/analyze_scaling.py --methods direct,iterative --direct-boundary fill
-    python scripts/analyze_scaling.py --methods fourier --maxiter 2000
-    python scripts/analyze_scaling.py --methods direct,fourier,iterative --direct-boundary wrap
+    python scripts/analyze_scaling.py --methods gradient --maxiter 2000
+    python scripts/analyze_scaling.py --methods direct,fourier,iterative,gradient
 """
 
 from __future__ import annotations
@@ -32,29 +33,29 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
-from deconv.experiments.experiment import SizeCase, run_size_case, save_benchmark
-from deconv.methods.iterative import DEFAULT_CGLS_MAXITER, DEFAULT_CGLS_TOL
+from deconv.experiments.experiment import ALL_METHODS, SizeCase, run_size_case, save_benchmark
 from deconv.io.utils import create_results_folder
+from deconv.methods.iterative import DEFAULT_CGLS_MAXITER, DEFAULT_CGLS_TOL
 
 # ---------------------------------------------------------------------------
 # Configuration — edit these, or override via CLI
 # ---------------------------------------------------------------------------
 
 # Which reconstruction methods to run (any non-empty subset).
-METHODS: tuple[str, ...] = ("direct", "fourier")
-# "direct" | "fourier" | "iterative"
+METHODS: tuple[str, ...] = ("direct", "fourier", "gradient")
+# "direct" | "fourier" | "iterative" | "gradient"
 
 # Direct reconstruction boundary. Observation is always fill.
-# Fourier is always circular; iterative is always matrix-free fill.
+# Fourier is always circular; iterative/gradient are always matrix-free fill.
 DIRECT_BOUNDARY = "fill"
 # "fill" | "wrap"
 
-# CGLS controls (iterative method only)
+# Shared iteration controls for CGLS and gradient descent
 CGLS_MAXITER = DEFAULT_CGLS_MAXITER
 CGLS_TOL = DEFAULT_CGLS_TOL
 
 # Image-size sweep and PSF
-ANALYSIS_SIZES: tuple[int, ...] = (16, 24, 32, 40, 48, 64, 72, 80)
+ANALYSIS_SIZES: tuple[int, ...] = (16, 24, 32, 40, 48, 64, 72)
 SIGMA = 1.0
 KERNEL_SIZE = 7
 
@@ -63,7 +64,8 @@ KERNEL_SIZE = 7
 METHOD_STYLE = {
     "direct": ("o-", "#3b6d9c", "Direct"),
     "fourier": ("s-", "#c46b3a", "Fourier (circular)"),
-    "iterative": ("^-", "#2f6f4e", "Iterative FFT (fill)"),
+    "iterative": ("^-", "#2f6f4e", "Iterative CGLS (fill)"),
+    "gradient": ("d-", "#8b5a2b", "Gradient descent (fill)"),
 }
 
 
@@ -100,7 +102,7 @@ def _series(
 
 def _active_methods(cases: list[SizeCase]) -> tuple[str, ...]:
     names: list[str] = []
-    for name in ("direct", "fourier", "iterative"):
+    for name in ALL_METHODS:
         if any(m.name == name for case in cases for m in case.methods):
             names.append(name)
     return tuple(names)
@@ -154,8 +156,19 @@ def _plot_metric_vs_pixels(
     plt.close(fig)
 
 
-def _plot_agreement_direct_iterative(cases: list[SizeCase], path: Path) -> None:
-    """||x_iter - x_direct|| / ||x_direct|| when both recoveries exist."""
+def _plot_agreement_vs_direct(
+    cases: list[SizeCase],
+    path: Path,
+    *,
+    method_name: str,
+    label: str,
+    color: str,
+) -> None:
+    """||x_method - x_direct|| / ||x_direct|| when both recoveries exist."""
+    artifact_key = {
+        "iterative": "recovered_iterative",
+        "gradient": "recovered_gradient",
+    }[method_name]
     xs: list[float] = []
     ys: list[float] = []
     for case in cases:
@@ -163,30 +176,41 @@ def _plot_agreement_direct_iterative(cases: list[SizeCase], path: Path) -> None:
         if arts is None:
             continue
         x_d = arts.get("recovered_direct")
-        x_i = arts.get("recovered_iterative")
-        if x_d is None or x_i is None:
+        x_m = arts.get(artifact_key)
+        if x_d is None or x_m is None:
             continue
         denom = float(np.linalg.norm(x_d))
         if denom == 0.0:
             continue
         xs.append(float(case.n_pixels))
-        ys.append(float(np.linalg.norm(x_i - x_d) / denom))
+        ys.append(float(np.linalg.norm(x_m - x_d) / denom))
 
     if not xs:
         return
 
     fig, axis = plt.subplots(figsize=(7.2, 4.4))
-    axis.loglog(xs, np.maximum(ys, 1e-16), "D-", color="#6b4c9a", markersize=6)
+    axis.loglog(xs, np.maximum(ys, 1e-16), "D-", color=color, markersize=6)
     axis.set_xlabel(r"Pixels $N^2$")
     axis.set_ylabel(
-        r"$\|x_{\mathrm{iter}}-x_{\mathrm{direct}}\|_2"
+        rf"$\|x_{{\mathrm{{{label}}}}}-x_{{\mathrm{{direct}}}}\|_2"
         r" / \|x_{\mathrm{direct}}\|_2$"
     )
-    axis.set_title("Iterative vs Direct agreement")
+    axis.set_title(f"{METHOD_STYLE[method_name][2]} vs Direct agreement")
     axis.grid(True, which="both", linestyle=":", alpha=0.5)
     fig.tight_layout()
     fig.savefig(path, dpi=150, bbox_inches="tight")
     plt.close(fig)
+
+
+def _plot_agreement_direct_iterative(cases: list[SizeCase], path: Path) -> None:
+    """Backward-compatible wrapper for iterative vs Direct agreement."""
+    _plot_agreement_vs_direct(
+        cases,
+        path,
+        method_name="iterative",
+        label="iter",
+        color="#6b4c9a",
+    )
 
 
 def write_analysis_plots(cases: list[SizeCase], output_dir: Path) -> list[Path]:
@@ -253,7 +277,7 @@ def write_analysis_plots(cases: list[SizeCase], output_dir: Path) -> list[Path]:
             cases,
             value_attr="iterations",
             ylabel="CGLS iterations",
-            title="Iterative solver iterations vs pixels",
+            title="Iterative CGLS iterations vs pixels",
             path=iters_path,
             log_y=False,
             methods=("iterative",),
@@ -261,11 +285,37 @@ def write_analysis_plots(cases: list[SizeCase], output_dir: Path) -> list[Path]:
         if iters_path.is_file():
             written.append(iters_path)
 
+    if "gradient" in active:
+        gd_iters_path = analysis_dir / "gradient_iterations_vs_pixels.png"
+        _plot_metric_vs_pixels(
+            cases,
+            value_attr="iterations",
+            ylabel="Gradient-descent iterations",
+            title="Gradient-descent iterations vs pixels",
+            path=gd_iters_path,
+            log_y=False,
+            methods=("gradient",),
+        )
+        if gd_iters_path.is_file():
+            written.append(gd_iters_path)
+
     if "direct" in active and "iterative" in active:
         agree_path = analysis_dir / "iterative_vs_direct_agreement.png"
         _plot_agreement_direct_iterative(cases, agree_path)
         if agree_path.is_file():
             written.append(agree_path)
+
+    if "direct" in active and "gradient" in active:
+        gd_agree = analysis_dir / "gradient_vs_direct_agreement.png"
+        _plot_agreement_vs_direct(
+            cases,
+            gd_agree,
+            method_name="gradient",
+            label="gd",
+            color="#a67c52",
+        )
+        if gd_agree.is_file():
+            written.append(gd_agree)
 
     # Convenience copies at the results root.
     for src_name, dst_name in (
@@ -284,7 +334,7 @@ def write_analysis_plots(cases: list[SizeCase], output_dir: Path) -> list[Path]:
 
 def _parse_methods(text: str) -> tuple[str, ...]:
     parts = tuple(p.strip().lower() for p in text.split(",") if p.strip())
-    allowed = {"direct", "fourier", "iterative"}
+    allowed = set(ALL_METHODS)
     unknown = set(parts) - allowed
     if unknown:
         raise argparse.ArgumentTypeError(
@@ -293,7 +343,7 @@ def _parse_methods(text: str) -> tuple[str, ...]:
     if not parts:
         raise argparse.ArgumentTypeError("Provide at least one method")
     # Preserve a stable order.
-    return tuple(m for m in ("direct", "fourier", "iterative") if m in parts)
+    return tuple(m for m in ALL_METHODS if m in parts)
 
 
 def _parse_sizes(text: str) -> tuple[int, ...]:
@@ -314,7 +364,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--methods",
         type=_parse_methods,
         default=None,
-        help="Comma-separated subset: direct,fourier,iterative "
+        help="Comma-separated subset: direct,fourier,iterative,gradient "
         f"(default: {','.join(METHODS)})",
     )
     parser.add_argument(
@@ -328,13 +378,19 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--maxiter",
         type=int,
         default=None,
-        help=f"CGLS max iterations for iterative method (default: {CGLS_MAXITER})",
+        help=(
+            "Max iterations for iterative CGLS and gradient descent "
+            f"(default: {CGLS_MAXITER})"
+        ),
     )
     parser.add_argument(
         "--tol",
         type=float,
         default=None,
-        help=f"CGLS relative normal-residual tolerance (default: {CGLS_TOL})",
+        help=(
+            "Relative normal-residual tolerance for CGLS and gradient descent "
+            f"(default: {CGLS_TOL})"
+        ),
     )
     parser.add_argument(
         "--sizes",
@@ -391,12 +447,14 @@ def run_scaling_analysis(
     print(f"Methods: {', '.join(methods)}")
     print(f"Direct reconstruction boundary: {direct_boundary}")
     print("Fourier reconstruction boundary: circular")
-    print("Iterative reconstruction boundary: fill")
+    print("Iterative / gradient reconstruction boundary: fill")
     print(f"Sizes: {sizes}")
     print(f"PSF: sigma={sigma}, kernel={kernel_size}")
-    if "iterative" in methods:
-        print(f"CGLS: tol={cgls_tol}, maxiter={cgls_maxiter}, x0=0, float64")
-
+    if "iterative" in methods or "gradient" in methods:
+        print(
+            f"Iterative solvers: tol={cgls_tol}, maxiter={cgls_maxiter}, "
+            "x0=0, float64"
+        )
     cases: list[SizeCase] = []
     for size in sizes:
         print(f"\n--- N={size} ({size * size} pixels) ---")

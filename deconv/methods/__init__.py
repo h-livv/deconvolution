@@ -1,1 +1,1 @@
-"""Reconstruction methods: Direct, Fourier quotient, and iterative fill CGLS."""
+"""Reconstruction methods: Direct, Fourier quotient, iterative CGLS, gradient descent."""

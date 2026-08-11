@@ -1,14 +1,17 @@
 """
-Three-method deconvolution benchmark (fill observation).
+Multi-method deconvolution benchmark (fill observation).
 
 Compares, on the *same* physical fill-boundary test problem:
 
 1. Direct — dense ``A``, ``lstsq`` (boundary=fill)
 2. Fourier quotient — circular division (intentionally different model)
 3. Iterative FFT — matrix-free CGLS with the exact fill operator
+4. Gradient descent — same fill operator, steepest descent (no CGLS)
 
 Runtimes are deconvolution-only (via ``time_deconvolution`` / equivalent
-clocks around the solver). Setup (image, PSF, blur) is outside the clock.
+clocks around the solver), except the matrix-free iterative solvers which
+also include the forward fill convolution that formed ``b``. Setup
+(image, PSF) is outside the clock.
 """
 
 from __future__ import annotations
@@ -23,9 +26,17 @@ from time import perf_counter
 import matplotlib.pyplot as plt
 import numpy as np
 
+from deconv.data.synthetic import generate_synthetic_image
 from deconv.forward.blur import apply_blur
+from deconv.forward.psf import gaussian_psf
+from deconv.io.utils import clip_to_unit_interval, create_results_folder, save_image, show_image
 from deconv.methods.direct import direct_deconvolution
 from deconv.methods.fourier import fourier_deconvolution
+from deconv.methods.gradient_descent import (
+    DEFAULT_GD_MAXITER,
+    DEFAULT_GD_TOL,
+    gradient_deconvolution_with_info,
+)
 from deconv.methods.iterative import (
     DEFAULT_CGLS_MAXITER,
     DEFAULT_CGLS_TOL,
@@ -33,12 +44,11 @@ from deconv.methods.iterative import (
     iterative_deconvolution_with_info,
 )
 from deconv.metrics import mean_squared_error, relative_l2_error, time_deconvolution
-from deconv.forward.psf import gaussian_psf
-from deconv.data.synthetic import generate_synthetic_image
-from deconv.io.utils import clip_to_unit_interval, create_results_folder, save_image, show_image
 
-# Default size grid for the three-method benchmark entry point.
+# Default size grid for the fill-method benchmark entry point.
 DEFAULT_SIZES = (16, 24, 32, 40)
+
+ALL_METHODS: tuple[str, ...] = ("direct", "fourier", "iterative", "gradient")
 
 
 @dataclass
@@ -133,11 +143,12 @@ def run_size_case(
     Parameters
     ----------
     methods:
-        Subset of ``{"direct", "fourier", "iterative"}``. Default: all three.
+        Subset of ``{"direct", "fourier", "iterative", "gradient"}``.
+        Default: all four.
     direct_boundary:
         Boundary used by Direct reconstruction (``"fill"`` or ``"wrap"``).
         The forward observation is always ``fill``. Fourier is always circular;
-        iterative is always the matrix-free fill operator.
+        iterative and gradient always use the matrix-free fill operator.
     """
     if kernel_size % 2 == 0:
         kernel_size -= 1
@@ -146,12 +157,8 @@ def run_size_case(
     if direct_boundary not in {"fill", "wrap"}:
         raise ValueError("direct_boundary must be 'fill' or 'wrap'")
 
-    selected = tuple(methods) if methods is not None else (
-        "direct",
-        "fourier",
-        "iterative",
-    )
-    unknown = set(selected) - {"direct", "fourier", "iterative"}
+    selected = tuple(methods) if methods is not None else ALL_METHODS
+    unknown = set(selected) - set(ALL_METHODS)
     if unknown:
         raise ValueError(f"Unknown methods: {sorted(unknown)}")
     if not selected:
@@ -171,11 +178,14 @@ def run_size_case(
     want_direct = "direct" in selected
     want_fourier = "fourier" in selected
     want_iterative = "iterative" in selected
+    want_gradient = "gradient" in selected
 
     recovered_direct = None
     recovered_fourier = None
     recovered_iterative = None
+    recovered_gradient = None
     cgls_info = None
+    gd_info = None
 
     # --- Direct ---
     if want_direct:
@@ -269,6 +279,41 @@ def run_size_case(
         recovered_iterative = info.image
         cgls_info = info
 
+    # --- Gradient descent on the same fill FFT operator ---
+    # Same timing convention as iterative (forward blur + solve).
+    if want_gradient:
+        t_setup0 = perf_counter()
+        _ = FillConvolutionOperator(psf, observation.shape)
+        setup_s = perf_counter() - t_setup0
+
+        def _gd_call():
+            t0 = perf_counter()
+            info = gradient_deconvolution_with_info(
+                observation, psf, tol=cgls_tol, maxiter=cgls_maxiter
+            )
+            elapsed = perf_counter() - t0
+            return info, elapsed
+
+        (info, elapsed), peak = _peak_memory_mib(_gd_call)
+        method_results.append(
+            MethodResult(
+                name="gradient",
+                boundary="fill",
+                runtime_s=elapsed + blur_s,
+                setup_s=setup_s,
+                rel_error=relative_l2_error(original, info.image),
+                mse=mean_squared_error(original, info.image),
+                rel_residual=info.residual_history[-1],
+                iterations=info.iterations,
+                n_forward=info.n_forward,
+                n_adjoint=info.n_adjoint,
+                peak_memory_mib=peak,
+                residual_history=list(info.residual_history),
+            )
+        )
+        recovered_gradient = info.image
+        gd_info = info
+
     case = SizeCase(
         image_size=size,
         n_pixels=n_pixels,
@@ -285,7 +330,9 @@ def run_size_case(
         "recovered_direct": recovered_direct,
         "recovered_fourier": recovered_fourier,
         "recovered_iterative": recovered_iterative,
+        "recovered_gradient": recovered_gradient,
         "cgls": cgls_info,
+        "gradient": gd_info,
         "direct_boundary": direct_boundary,
         "methods": selected,
     }
@@ -313,6 +360,11 @@ def _save_case_images(case: SizeCase, output_dir: Path) -> None:
             clip_to_unit_interval(arts["recovered_iterative"]),
             sub / "recovered_iterative.png",
         )
+    if arts.get("recovered_gradient") is not None:
+        save_image(
+            clip_to_unit_interval(arts["recovered_gradient"]),
+            sub / "recovered_gradient.png",
+        )
 
     direct_boundary = arts.get("direct_boundary", "fill")
     panels = [
@@ -334,7 +386,14 @@ def _save_case_images(case: SizeCase, output_dir: Path) -> None:
         panels.append(
             (
                 clip_to_unit_interval(arts["recovered_iterative"]),
-                "Iterative FFT (fill)",
+                "Iterative CGLS (fill)",
+            )
+        )
+    if arts.get("recovered_gradient") is not None:
+        panels.append(
+            (
+                clip_to_unit_interval(arts["recovered_gradient"]),
+                "Gradient descent (fill)",
             )
         )
 
@@ -359,6 +418,19 @@ def _save_case_images(case: SizeCase, output_dir: Path) -> None:
         axis.grid(True, which="both", linestyle=":", alpha=0.5)
         fig.tight_layout()
         fig.savefig(sub / "iterative_convergence.png", dpi=150, bbox_inches="tight")
+        plt.close(fig)
+
+    gd = arts.get("gradient")
+    if gd is not None:
+        hist = gd.residual_history
+        fig, axis = plt.subplots(figsize=(6.0, 3.6))
+        axis.semilogy(np.arange(len(hist)), hist, color="#8b5a2b")
+        axis.set_xlabel("Gradient-descent iteration")
+        axis.set_ylabel(r"$\|Ax_k - b\|_2 / \|b\|_2$")
+        axis.set_title(f"Fill gradient-descent residual (N={case.image_size})")
+        axis.grid(True, which="both", linestyle=":", alpha=0.5)
+        fig.tight_layout()
+        fig.savefig(sub / "gradient_convergence.png", dpi=150, bbox_inches="tight")
         plt.close(fig)
 
 
@@ -388,11 +460,15 @@ def save_benchmark(cases: list[SizeCase], output_dir: Path) -> None:
         "protocol": {
             "observation": "fill / zero-pad linear convolution (mode=same)",
             "methods": {
-                "direct": "dense A + lstsq, boundary=fill",
+                "direct": "dense A + lstsq, boundary configurable",
                 "fourier": "circular Fourier quotient (model mismatch by design)",
                 "iterative": "matrix-free CGLS on FFT fill operator",
+                "gradient": "matrix-free steepest descent on FFT fill operator",
             },
-            "timing": "deconvolution only; image/PSF/blur outside the clock",
+            "timing": (
+                "deconvolution only for direct/fourier; "
+                "iterative/gradient include forward fill blur + solve"
+            ),
             "cgls": {
                 "tol": DEFAULT_CGLS_TOL,
                 "maxiter": DEFAULT_CGLS_MAXITER,
@@ -400,13 +476,21 @@ def save_benchmark(cases: list[SizeCase], output_dir: Path) -> None:
                 "x0": "zeros",
                 "dtype": "float64",
             },
+            "gradient": {
+                "tol": DEFAULT_GD_TOL,
+                "maxiter": DEFAULT_GD_MAXITER,
+                "stopping": (
+                    "||A^T (Ax-b)|| / ||A^T b|| < tol  OR  ||Ax-b|| / ||b|| < tol"
+                ),
+                "step": "exact line search for quadratic LS",
+                "x0": "zeros",
+                "dtype": "float64",
+            },
             "memory": "tracemalloc peak during deconvolution call (MiB)",
         },
         "rows": rows,
     }
-    (output_dir / "benchmark_three_method.json").write_text(
-        json.dumps(payload, indent=2)
-    )
+    (output_dir / "benchmark_methods.json").write_text(json.dumps(payload, indent=2))
 
     header = (
         "image_size,n_pixels,n_matrix_entries,method,boundary,"
@@ -427,13 +511,11 @@ def save_benchmark(cases: list[SizeCase], output_dir: Path) -> None:
                 f"{'' if m.peak_memory_mib is None else f'{m.peak_memory_mib:.6f}'},"
                 f"{int(m.skipped)}"
             )
-    (output_dir / "benchmark_three_method.csv").write_text(
-        header + "\n".join(lines) + "\n"
-    )
+    (output_dir / "benchmark_methods.csv").write_text(header + "\n".join(lines) + "\n")
 
     # Human-readable table
     table_lines = [
-        "Three-method fill-observation benchmark",
+        "Fill-observation multi-method benchmark",
         "=======================================",
         "",
         f"{'Size':>4} {'Method':>10} {'Bound':>9} {'Runtime_s':>12} "
@@ -460,9 +542,7 @@ def save_benchmark(cases: list[SizeCase], output_dir: Path) -> None:
             f"adjoint_max={case.validation['adjoint_rel_error_max']:.3e}"
         )
         table_lines.append("")
-    (output_dir / "benchmark_three_method.txt").write_text(
-        "\n".join(table_lines) + "\n"
-    )
+    (output_dir / "benchmark_methods.txt").write_text("\n".join(table_lines) + "\n")
     # Analysis suite (runtime/memory/error vs pixels, etc.).
     from deconv.experiments.analysis import write_analysis_plots
 
@@ -475,12 +555,13 @@ def run_three_method_benchmark(
     sigma: float = 1.0,
     kernel_size: int = 7,
 ) -> Path:
+    """Run the shared fill-observation multi-method benchmark (legacy name)."""
     output_dir = create_results_folder("results")
-    print("Three-method benchmark (shared fill observation)")
+    print("Fill-observation multi-method benchmark")
     print(f"Writing to {output_dir}")
     print(f"PSF: sigma={sigma}, kernel={kernel_size}")
     print(
-        f"CGLS: tol={DEFAULT_CGLS_TOL}, maxiter={DEFAULT_CGLS_MAXITER}, x0=0, float64"
+        f"CGLS/GD: tol={DEFAULT_CGLS_TOL}, maxiter={DEFAULT_CGLS_MAXITER}, x0=0, float64"
     )
     cases: list[SizeCase] = []
     for size in sizes:
