@@ -124,7 +124,6 @@ results/<timestamp>/
 │   ├── memory_vs_pixels.png
 │   ├── error_vs_pixels.png
 │   ├── rel_residual_vs_pixels.png
-│   ├── mse_vs_pixels.png
 │   ├── iterations_vs_pixels.png              # if iterative selected
 │   ├── gradient_iterations_vs_pixels.png     # if gradient selected
 │   ├── iterative_vs_direct_agreement.png     # if iterative+direct

@@ -62,7 +62,7 @@ SYNTHETIC_PATTERN = "edge_square"
 # "corner_pixel" | "edge_square" | "border_frame" | "diagonal"
 
 # Methods to run — any non-empty subset, in any order.
-METHODS: tuple[str, ...] = ("direct", "fourier", "gradient")
+METHODS: tuple[str, ...] = ("direct", "fourier")
 # Allowed names: "direct", "fourier", "iterative", "gradient"
 # Examples:
 #   METHODS = ("direct", "fourier")
@@ -73,8 +73,11 @@ METHODS: tuple[str, ...] = ("direct", "fourier", "gradient")
 IMAGE_SIZE = 64
 
 # Gaussian PSF — matched to analyze_scaling (SIGMA=1.0, KERNEL_SIZE=7)
+# Gradient descent is much more sensitive to PSF conditioning than CGLS:
+# milder blur (e.g. SIGMA=0.6–0.8, KERNEL_SIZE=5) cuts GD error and runtime
+# sharply; KERNEL_SIZE has little effect once SIGMA is fixed.
 SIGMA = 1.0
-KERNEL_SIZE = 7
+KERNEL_SIZE = 5
 
 # Observation
 NOISE_STD = 0.0
@@ -92,7 +95,10 @@ BOUNDARY_MODE = "mismatch"
 CGLS_TOL = DEFAULT_CGLS_TOL
 CGLS_MAXITER = DEFAULT_CGLS_MAXITER
 
-# Gradient descent (same fill operator; shared tol/maxiter defaults)
+# Gradient descent (same fill operator).
+# Error/runtime levers (no new solver knobs): raise GD_MAXITER to spend more
+# iterations on harder PSFs; loosen GD_TOL only after the solve actually
+# converges (otherwise maxiter dominates). Prefer milder SIGMA for low GD error.
 GD_TOL = DEFAULT_GD_TOL
 GD_MAXITER = DEFAULT_GD_MAXITER
 
@@ -315,7 +321,7 @@ def save_metrics_figure(
     bars_mse = axes[1].bar(labels, mse_plot, color=colors)
     axes[1].set_yscale("log")
     axes[1].set_ylabel("MSE (log scale)")
-    axes[1].set_title("Mean Squared Error")
+    axes[1].set_title("Mean squared error")
     for bar, value in zip(bars_mse, mse):
         axes[1].annotate(
             f"{value:.3e}",

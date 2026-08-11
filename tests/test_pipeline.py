@@ -5,12 +5,12 @@ from __future__ import annotations
 import numpy as np
 from scipy.signal import convolve2d
 
+from deconv.data.synthetic import generate_synthetic_image
 from deconv.forward.blur import apply_blur
+from deconv.forward.psf import gaussian_psf
 from deconv.methods.direct import build_convolution_matrix, direct_deconvolution
 from deconv.methods.fourier import _embed_psf, fourier_deconvolution
 from deconv.metrics import mean_squared_error
-from deconv.forward.psf import gaussian_psf
-from deconv.data.synthetic import generate_synthetic_image
 
 
 def test_psf_is_normalized_and_centered() -> None:

@@ -208,6 +208,7 @@ def run_size_case(
                 setup_s=0.0,
                 rel_error=relative_l2_error(original, x_d),
                 mse=mean_squared_error(original, x_d),
+
                 rel_residual=_relative_residual_fill(psf, x_d, observation),
                 iterations=None,
                 n_forward=None,
@@ -234,6 +235,7 @@ def run_size_case(
                 setup_s=0.0,
                 rel_error=relative_l2_error(original, x_f),
                 mse=mean_squared_error(original, x_f),
+
                 rel_residual=_relative_residual_fill(psf, x_f, observation),
                 iterations=None,
                 n_forward=None,
@@ -268,6 +270,7 @@ def run_size_case(
                 setup_s=setup_s,
                 rel_error=relative_l2_error(original, info.image),
                 mse=mean_squared_error(original, info.image),
+
                 rel_residual=info.residual_history[-1],
                 iterations=info.iterations,
                 n_forward=info.n_forward,
@@ -303,6 +306,7 @@ def run_size_case(
                 setup_s=setup_s,
                 rel_error=relative_l2_error(original, info.image),
                 mse=mean_squared_error(original, info.image),
+
                 rel_residual=info.residual_history[-1],
                 iterations=info.iterations,
                 n_forward=info.n_forward,

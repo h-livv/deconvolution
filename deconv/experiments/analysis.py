@@ -55,7 +55,7 @@ CGLS_MAXITER = DEFAULT_CGLS_MAXITER
 CGLS_TOL = DEFAULT_CGLS_TOL
 
 # Image-size sweep and PSF
-ANALYSIS_SIZES: tuple[int, ...] = (16, 24, 32, 40, 48, 64, 72)
+ANALYSIS_SIZES: tuple[int, ...] = (16, 24, 32, 40, 48, 64, 72, 80)
 SIGMA = 1.0
 KERNEL_SIZE = 7
 

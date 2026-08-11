@@ -182,8 +182,7 @@ iterations than CGLS.
 | Metric | Definition |
 |--------|------------|
 | Runtime | Wall time of the deconvolution call only (`time_deconvolution` / equivalent) |
-| MSE | \(\frac1{MN}\sum (x_{\mathrm{recon}}-x)^2\) |
-| Rel. error | \(\|x_{\mathrm{recon}}-x\|_2 / \|x\|_2\) |
+| Rel. reconstruction error | \(\|x_{\mathrm{recon}}-x\|_2 / \|x\|_2\) |
 | Rel. residual | \(\|A_{\mathrm{fill}} x_{\mathrm{recon}} - b\|_2 / \|b\|_2\) |
 | Peak memory | `tracemalloc` peak during the timed solve (MiB) |
 
