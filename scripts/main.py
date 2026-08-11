@@ -14,6 +14,7 @@ from __future__ import annotations
 import sys
 from functools import partial
 from pathlib import Path
+from time import perf_counter
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -23,19 +24,19 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from deconv.blur import add_gaussian_noise, apply_blur
-from deconv.direct import direct_deconvolution
-from deconv.fourier import fourier_deconvolution
-from deconv.iterative import (
+from deconv.forward.blur import add_gaussian_noise, apply_blur
+from deconv.methods.direct import direct_deconvolution
+from deconv.methods.fourier import fourier_deconvolution
+from deconv.methods.iterative import (
     DEFAULT_CGLS_MAXITER,
     DEFAULT_CGLS_TOL,
     iterative_deconvolution_with_info,
 )
 from deconv.metrics import compute_metrics, time_deconvolution
 from deconv.paths import IMAGES_DIR
-from deconv.psf import gaussian_psf
-from deconv.synthetic import generate_synthetic_image
-from deconv.utils import (
+from deconv.forward.psf import gaussian_psf
+from deconv.data.synthetic import generate_synthetic_image
+from deconv.io.utils import (
     clip_to_unit_interval,
     create_results_folder,
     load_image,
@@ -49,10 +50,10 @@ from deconv.utils import (
 # ---------------------------------------------------------------------------
 
 # Image
-IMAGE_SOURCE = "synthetic"
+IMAGE_SOURCE = "file"
 # "file" | "synthetic"
-IMAGE_PATH = str(IMAGES_DIR / "shapes.png")
-SYNTHETIC_PATTERN = "border_frame"
+IMAGE_PATH = str(IMAGES_DIR / "ring.png")
+SYNTHETIC_PATTERN = "edge_square"
 # "corner_pixel" | "edge_square" | "border_frame" | "diagonal"
 
 # Method
@@ -61,7 +62,7 @@ METHOD = "all"
 # "both" = direct + fourier; "all" = direct + fourier + iterative
 
 # Image settings — matched to analyze_scaling defaults
-IMAGE_SIZE = 54
+IMAGE_SIZE = 64
 
 # Gaussian PSF — matched to analyze_scaling (SIGMA=1.0, KERNEL_SIZE=7)
 SIGMA = 1.0
@@ -244,10 +245,21 @@ def save_metrics_figure(
             fontsize=8,
         )
 
-    axes[1].bar(labels, mse, color=colors)
-    axes[1].set_ylabel("MSE")
+    mse_plot = [max(v, 1e-30) for v in mse]
+    bars_mse = axes[1].bar(labels, mse_plot, color=colors)
+    axes[1].set_yscale("log")
+    axes[1].set_ylabel("MSE (log scale)")
     axes[1].set_title("Mean Squared Error")
-    axes[1].ticklabel_format(axis="y", style="scientific", scilimits=(0, 0))
+    for bar, value in zip(bars_mse, mse):
+        axes[1].annotate(
+            f"{value:.3e}",
+            xy=(bar.get_x() + bar.get_width() / 2, bar.get_height()),
+            xytext=(0, 4),
+            textcoords="offset points",
+            ha="center",
+            va="bottom",
+            fontsize=8,
+        )
 
     for axis in axes:
         axis.grid(axis="y", linestyle=":", alpha=0.5)
@@ -433,11 +445,10 @@ def run() -> Path:
 
     original, _image_name = load_working_image()
     blur_psf = gaussian_psf(KERNEL_SIZE, SIGMA)
-    observation = add_gaussian_noise(
-        apply_blur(original, blur_psf, boundary=blur_boundary, fillvalue=0.0),
-        NOISE_STD,
-        seed=0,
-    )
+    t_blur0 = perf_counter()
+    blurred = apply_blur(original, blur_psf, boundary=blur_boundary, fillvalue=0.0)
+    blur_s = perf_counter() - t_blur0
+    observation = add_gaussian_noise(blurred, NOISE_STD, seed=0)
     reconstruction_psf = gaussian_psf(KERNEL_SIZE, RECONSTRUCTION_SIGMA)
 
     recovered_direct = None
@@ -472,10 +483,8 @@ def run() -> Path:
         )
 
     if want_iterative:
-        # Fill operator + CGLS. Existing direct/fourier paths are untouched.
-        # Time the full informative solve once (same work as iterative_deconvolution).
-        from time import perf_counter
-
+        # Fill operator + CGLS. Runtime includes the forward convolution that
+        # formed ``b`` plus the solve (Direct / Fourier stay deconvolution-only).
         t0 = perf_counter()
         info = iterative_deconvolution_with_info(
             observation,
@@ -483,7 +492,7 @@ def run() -> Path:
             tol=CGLS_TOL,
             maxiter=CGLS_MAXITER,
         )
-        elapsed = perf_counter() - t0
+        elapsed = perf_counter() - t0 + blur_s
         recovered_iterative = info.image
         metrics_iterative = compute_metrics(original, recovered_iterative, elapsed)
         iterative_iterations = info.iterations

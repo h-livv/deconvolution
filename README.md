@@ -65,12 +65,19 @@ Outputs go to `results/<timestamp>/`. Configuration details and CLI flags:
 ## Repository structure
 
 ```
-deconv/      # operators, solvers, experiment harness, scaling analysis
-scripts/     # main.py, analyze_scaling.py, benchmark.py
-tests/       # Fourier, fill-operator, and pipeline checks
-docs/        # HOW_IT_WORKS, RUNNING, MATH
-images/      # optional file inputs
-results/     # timestamped experiment outputs
+deconv/
+├── forward/        # PSF + blur (forms b = h*x)
+├── methods/        # Direct, Fourier quotient, iterative fill CGLS
+├── data/           # Synthetic test fields
+├── io/             # Load / save / display / results folders
+├── experiments/    # Three-method harness + scaling analysis
+├── metrics.py      # Error metrics and timing helpers
+└── paths.py        # Repository / images / results roots
+scripts/            # main.py, analyze_scaling.py, benchmark.py
+tests/              # Fourier, fill-operator, and pipeline checks
+docs/               # HOW_IT_WORKS, RUNNING, MATH
+images/             # Optional file inputs
+results/            # Timestamped experiment outputs
 ```
 
 ## Scope

@@ -41,15 +41,15 @@ If you are new here: start with `python scripts/main.py`, open the figures in
 
 | Stage | Module | Notes |
 |-------|--------|-------|
-| Image | `deconv/synthetic.py` / `deconv/utils.py` | Synthetic: black bg, dark-grey features; or load a file |
-| PSF | `deconv/psf.py` | Discrete Gaussian, sum-normalized to 1 |
-| Blur | `deconv/blur.py` | `scipy.signal.convolve2d(..., mode='same')` |
-| Direct | `deconv/direct.py` | Dense \(A\), `numpy.linalg.lstsq` |
-| Fourier | `deconv/fourier.py` | Circular division only |
-| Iterative | `deconv/iterative.py` | Zero-padded FFT apply of **fill** \(A\), CGLS |
+| Image | `deconv/data/synthetic.py` / `deconv/io/utils.py` | Synthetic: black bg, dark-grey features; or load a file |
+| PSF | `deconv/forward/psf.py` | Discrete Gaussian, sum-normalized to 1 |
+| Blur | `deconv/forward/blur.py` | `scipy.signal.convolve2d(..., mode='same')` |
+| Direct | `deconv/methods/direct.py` | Dense \(A\), `numpy.linalg.lstsq` |
+| Fourier | `deconv/methods/fourier.py` | Circular division only |
+| Iterative | `deconv/methods/iterative.py` | Zero-padded FFT apply of **fill** \(A\), CGLS |
 | Timing | `deconv/metrics.py` | Clocks **deconvolution only** (not blur / I/O) |
 | Demo | `scripts/main.py` | One size, configurable |
-| Scaling | `scripts/analyze_scaling.py` + `deconv/experiment.py` | Many sizes, fill observation |
+| Scaling | `scripts/analyze_scaling.py` + `deconv/experiments/` | Many sizes, fill observation |
 
 ---
 
@@ -122,7 +122,7 @@ data.
 
 ## Synthetic images
 
-`synthetic.py` builds grayscale test fields in \([0,1]\):
+`deconv/data/synthetic.py` builds grayscale test fields in \([0,1]\):
 
 - **Background:** black (`0.0`)
 - **Borders / patterns:** dark grey (`0.35`)

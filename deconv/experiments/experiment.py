@@ -23,19 +23,19 @@ from time import perf_counter
 import matplotlib.pyplot as plt
 import numpy as np
 
-from deconv.blur import apply_blur
-from deconv.direct import direct_deconvolution
-from deconv.fourier import fourier_deconvolution
-from deconv.iterative import (
+from deconv.forward.blur import apply_blur
+from deconv.methods.direct import direct_deconvolution
+from deconv.methods.fourier import fourier_deconvolution
+from deconv.methods.iterative import (
     DEFAULT_CGLS_MAXITER,
     DEFAULT_CGLS_TOL,
     FillConvolutionOperator,
     iterative_deconvolution_with_info,
 )
 from deconv.metrics import mean_squared_error, relative_l2_error, time_deconvolution
-from deconv.psf import gaussian_psf
-from deconv.synthetic import generate_synthetic_image
-from deconv.utils import clip_to_unit_interval, create_results_folder, save_image, show_image
+from deconv.forward.psf import gaussian_psf
+from deconv.data.synthetic import generate_synthetic_image
+from deconv.io.utils import clip_to_unit_interval, create_results_folder, save_image, show_image
 
 # Default size grid for the three-method benchmark entry point.
 DEFAULT_SIZES = (16, 24, 32, 40)
@@ -93,7 +93,7 @@ def _relative_residual_fill(
 
 def validate_operators(psf: np.ndarray, size: int, trials: int = 4) -> dict[str, float]:
     """Forward agreement with Direct matrix + adjoint identity."""
-    from deconv.direct import build_convolution_matrix
+    from deconv.methods.direct import build_convolution_matrix
 
     op = FillConvolutionOperator(psf, (size, size))
     A = build_convolution_matrix(psf, size, size, boundary="fill")
@@ -160,7 +160,9 @@ def run_size_case(
     original = generate_synthetic_image(size, "border_frame")
     psf = gaussian_psf(kernel_size, sigma)
     # Physical fill observation — always, regardless of reconstruction boundary.
+    t_blur0 = perf_counter()
     observation = apply_blur(original, psf, boundary="fill", fillvalue=0.0)
+    blur_s = perf_counter() - t_blur0
 
     validation = validate_operators(psf, size)
     method_results: list[MethodResult] = []
@@ -232,6 +234,8 @@ def run_size_case(
         recovered_fourier = x_f
 
     # --- Iterative FFT fill CGLS ---
+    # Runtime includes the forward fill convolution that formed ``b`` plus the
+    # CGLS solve (Direct / Fourier remain deconvolution-only).
     if want_iterative:
         t_setup0 = perf_counter()
         _ = FillConvolutionOperator(psf, observation.shape)
@@ -250,7 +254,7 @@ def run_size_case(
             MethodResult(
                 name="iterative",
                 boundary="fill",
-                runtime_s=elapsed,
+                runtime_s=elapsed + blur_s,
                 setup_s=setup_s,
                 rel_error=relative_l2_error(original, info.image),
                 mse=mean_squared_error(original, info.image),
@@ -460,7 +464,7 @@ def save_benchmark(cases: list[SizeCase], output_dir: Path) -> None:
         "\n".join(table_lines) + "\n"
     )
     # Analysis suite (runtime/memory/error vs pixels, etc.).
-    from deconv.analysis import write_analysis_plots
+    from deconv.experiments.analysis import write_analysis_plots
 
     write_analysis_plots(cases, output_dir)
 

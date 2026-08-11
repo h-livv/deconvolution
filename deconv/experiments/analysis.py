@@ -32,16 +32,16 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
-from deconv.experiment import SizeCase, run_size_case, save_benchmark
-from deconv.iterative import DEFAULT_CGLS_MAXITER, DEFAULT_CGLS_TOL
-from deconv.utils import create_results_folder
+from deconv.experiments.experiment import SizeCase, run_size_case, save_benchmark
+from deconv.methods.iterative import DEFAULT_CGLS_MAXITER, DEFAULT_CGLS_TOL
+from deconv.io.utils import create_results_folder
 
 # ---------------------------------------------------------------------------
 # Configuration — edit these, or override via CLI
 # ---------------------------------------------------------------------------
 
 # Which reconstruction methods to run (any non-empty subset).
-METHODS: tuple[str, ...] = ("direct", "fourier", "iterative")
+METHODS: tuple[str, ...] = ("direct", "fourier")
 # "direct" | "fourier" | "iterative"
 
 # Direct reconstruction boundary. Observation is always fill.
@@ -54,7 +54,7 @@ CGLS_MAXITER = DEFAULT_CGLS_MAXITER
 CGLS_TOL = DEFAULT_CGLS_TOL
 
 # Image-size sweep and PSF
-ANALYSIS_SIZES: tuple[int, ...] = (16, 24, 32, 40, 48, 64)
+ANALYSIS_SIZES: tuple[int, ...] = (16, 24, 32, 40, 48, 64, 72, 80)
 SIGMA = 1.0
 KERNEL_SIZE = 7
 

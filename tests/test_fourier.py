@@ -6,8 +6,8 @@ import numpy as np
 import pytest
 from scipy.signal import convolve2d
 
-from deconv.fourier import _embed_psf, fourier_deconvolution
-from deconv.psf import gaussian_psf
+from deconv.methods.fourier import _embed_psf, fourier_deconvolution
+from deconv.forward.psf import gaussian_psf
 
 
 def _circular_blur(image: np.ndarray, psf: np.ndarray) -> np.ndarray:

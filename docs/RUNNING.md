@@ -74,7 +74,7 @@ Timing reported here is **deconvolution only** (blur and I/O are outside the clo
 ## 3. Multi-size scaling — `scripts/analyze_scaling.py`
 
 Preferred entry point for runtime / memory / error vs pixels.
-Config lives in `deconv/analysis.py`; the script is a thin CLI wrapper.
+Config lives in `deconv/experiments/analysis.py`; the script is a thin CLI wrapper.
 
 ```bash
 python scripts/analyze_scaling.py
@@ -83,7 +83,7 @@ python scripts/analyze_scaling.py
 ### Config (header) or CLI
 
 ```bash
-# Header defaults in deconv/analysis.py: METHODS, DIRECT_BOUNDARY, SIGMA=1.0,
+# Header defaults in deconv/experiments/analysis.py: METHODS, DIRECT_BOUNDARY, SIGMA=1.0,
 # KERNEL_SIZE=7, ANALYSIS_SIZES=(16,24,32,40,48,64), CGLS_MAXITER, CGLS_TOL
 
 python scripts/analyze_scaling.py \
@@ -142,7 +142,7 @@ python scripts/benchmark.py
 Runs the same fill-observation three-method protocol (default sizes
 `16,24,32,40`) and writes tables + analysis plots. Prefer
 `scripts/analyze_scaling.py` when you want CLI control over methods and sizes;
-the harness itself lives in `deconv/experiment.py`.
+the harness itself lives in `deconv/experiments/experiment.py`.
 
 ---
 

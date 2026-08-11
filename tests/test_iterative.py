@@ -5,10 +5,10 @@ from __future__ import annotations
 import numpy as np
 from scipy.signal import convolve2d
 
-from deconv.direct import build_convolution_matrix, direct_deconvolution
-from deconv.iterative import FillConvolutionOperator, iterative_deconvolution_with_info
-from deconv.psf import gaussian_psf
-from deconv.synthetic import generate_synthetic_image
+from deconv.methods.direct import build_convolution_matrix, direct_deconvolution
+from deconv.methods.iterative import FillConvolutionOperator, iterative_deconvolution_with_info
+from deconv.forward.psf import gaussian_psf
+from deconv.data.synthetic import generate_synthetic_image
 
 
 def test_fill_forward_matches_convolve2d_and_direct_matrix() -> None:
@@ -72,7 +72,7 @@ def test_iterative_is_not_circular_quotient() -> None:
     x = generate_synthetic_image(20, "edge_square")
     b = convolve2d(x, psf, mode="same", boundary="fill")
 
-    from deconv.fourier import fourier_deconvolution
+    from deconv.methods.fourier import fourier_deconvolution
 
     x_iter = iterative_deconvolution_with_info(b, psf, tol=1e-10, maxiter=2000).image
     x_four = fourier_deconvolution(b, psf, reg=0.0)
