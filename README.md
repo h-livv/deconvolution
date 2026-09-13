@@ -4,6 +4,11 @@ Exploratory study of **convolution-based inverse problems**, using controlled
 2D experiments. Solar Gravitational Lens (SGL) imaging is a motivating
 application; the present code is not an SGL reconstruction pipeline.
 
+> **Status: Archived / Exploratory.**
+> <br>
+> This repository is preserved as a record of experiments in numerical inverse
+> problems, convolution operators, and deconvolution methods.
+
 ## Problem
 
 Given a known convolution kernel (PSF) \(h\) and an unknown field \(x\), the
@@ -117,5 +122,3 @@ spatially varying PSFs, and additional inverse methods.
 ## Reference papers
 
 [Viktor T. Toth, Slava G. Turyshev, Image recovery with the solar gravitational lens (2021)](https://arxiv.org/abs/2012.05477v2)
-
----
