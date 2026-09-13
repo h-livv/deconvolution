@@ -30,7 +30,7 @@ This project focuses on:
 | Method | Approach | Boundary |
 |--------|----------|----------|
 | Direct | Explicit dense convolution matrix \(A\), least squares | Fill or wrap |
-| Fourier quotient | \(\hat X = \hat B / \hat H\) on the native DFT grid | Circular / periodic |
+| Fourier quotient | $(\hat X = \hat B / \hat H\)$ on the native DFT grid | Circular / periodic |
 | Iterative FFT | Matrix-free CGLS; FFTs apply the fill forward and adjoint | Fill |
 | Gradient descent | Same fill FFT operator; steepest descent (no conjugacy) | Fill |
 
@@ -52,13 +52,12 @@ descent invert that model; Fourier still assumes circular convolution
 
 <img src="assets/comparison.png" alt="Fill-blurred ring with Direct, Fourier, and gradient-descent reconstructions" width="750">
 
-<br>
 
 - On the fill-boundary observation shown above, Fourier is far faster than Direct or gradient
   descent, but the circular inverse is the wrong model: wrap-around ringing
   appears even though the ring is still recognizable.
 - Direct reconstructs the fill problem accurately (when the system is well
-  conditioned) but stores a dense \(N^2 \times N^2\) operator and scales poorly
+  conditioned) but stores a dense $\(N^2 \times N^2\)$ operator and scales poorly
   in time and memory.
 - Gradient descent targets the same fill least-squares problem without storing
   \(A\). It recovers the ring much more faithfully than Fourier, with more
