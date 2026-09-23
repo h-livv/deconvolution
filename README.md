@@ -9,13 +9,16 @@ $$
 b = h * x
 $$
 
-or equivalently \(b = Ax\), the project investigates how reconstruction methods
+the project investigates how reconstruction methods
 behave under different operator and boundary assumptions.
 
 The **Solar Gravitational Lens (SGL)** is a motivating application, but this is
 not an SGL reconstruction pipeline.
 
-> **Status:** Archived
+> **Status:** An ongoing exploration. The current experiments look at how
+> inversion methods behave under different convolution and boundary
+> assumptions. I expect the project to grow as I learn more about inverse
+> problems.
 
 ## Question
 
@@ -84,3 +87,9 @@ the mathematical and implementation details.
 ## Reference
 
 [V. T. Toth and S. G. Turyshev, *Image recovery with the solar gravitational lens* (2021)](https://arxiv.org/abs/2012.05477v2)
+
+## Scope
+
+The experiments use known point-spread functions and controlled boundary
+models. The Solar Gravitational Lens is a motivation, not an implemented
+reconstruction pipeline.
